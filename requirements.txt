@@ -1,0 +1,8 @@
+# Core runtime for the rebot_teleop conda env (python 3.11)
+#   conda create -n rebot_teleop -c conda-forge --override-channels python=3.11 -y
+#   conda run -n rebot_teleop pip install -r requirements.txt
+mujoco>=3.10,<4
+motorbridge>=0.5.6          # closed-source motor SDK (RobStride CAN protocol lives here)
+numpy>=2.1
+pyyaml>=6.0
+pygame>=2.6                 # keyboard + PS4 (DualShock) input
