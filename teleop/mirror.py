@@ -68,6 +68,11 @@ UNSAFE_STOP_HOLD_S = 0.5
 ESTOP_AFTER_CONSECUTIVE_FAILURES = 20
 REST_TOLERANCE_RAD = 1e-6
 
+# Gravity feedforward (MIT tau) clip, N·m: generous headroom over the
+# calibrated model's true gravity torques, but small enough that a corrupted
+# feed cannot overpower the arm (0.6 x joint effort limits).
+GRAVITY_FF_CLIP = np.array([21.6, 21.6, 21.6, 8.4, 8.4, 8.4])
+
 
 @dataclass(frozen=True)
 class MirrorGains:
@@ -247,6 +252,10 @@ class RealArmMirror:
         # where the arm is until the first good external target arrives.
         self._target_q = q6.copy()
         self._target_grip = float(self._ref_grip[0])
+        # Gravity feedforward starts at zero and takes over as soon as the
+        # sim supplies tau_g with its targets; held at last value while the
+        # clutch is engaged (gravity is pose-dependent and the pose is frozen).
+        self._tau_ff = np.zeros(6)
         self._last_fresh = time.monotonic()
         self.send_error_count = 0
         self.estopped = False
@@ -354,7 +363,13 @@ class RealArmMirror:
             pass
 
     def _poll_target(self, now: float) -> None:
-        """Pull one target; invalid/failed pulls leave the last good target."""
+        """Pull one target; invalid/failed pulls leave the last good target.
+
+        Accepts (q6, grip_norm) or (q6, grip_norm, tau_g6) — the optional
+        third element is a gravity-torque feedforward vector in N·m (the sim
+        computes it from the calibrated-mass model; without it the real PD
+        fights gravity alone and droops below the sim pose).
+        """
         try:
             result = self._get_target()
         except Exception:
@@ -362,13 +377,21 @@ class RealArmMirror:
         if result is None:
             return
         try:
-            q6t, grip_norm = result
+            if len(result) == 3:
+                q6t, grip_norm, tau_g = result
+            else:
+                q6t, grip_norm = result
+                tau_g = None
             q6t = np.asarray(q6t, dtype=np.float64).reshape(-1)
             gn = float(grip_norm)
         except Exception:
             return
         if q6t.shape != (6,) or not np.all(np.isfinite(q6t)) or not math.isfinite(gn):
             return
+        if tau_g is not None:
+            tau_g = np.asarray(tau_g, dtype=np.float64).reshape(-1)
+            if tau_g.shape == (6,) and np.all(np.isfinite(tau_g)):
+                np.clip(tau_g, -GRAVITY_FF_CLIP, GRAVITY_FF_CLIP, out=self._tau_ff)
         self._target_q = np.clip(q6t, JOINT_LIMITS_LOW, JOINT_LIMITS_HIGH)
         self._target_grip = GRIPPER_MOTOR_RANGE_RAD * min(max(gn, 0.0), 1.0)
         self._last_fresh = now
@@ -424,7 +447,8 @@ class RealArmMirror:
             ok = True
             try:
                 arm_group.send_mit(
-                    self._ref_q, vel=zeros6, kp=self._gains.arm_kp, kd=self._gains.arm_kd
+                    self._ref_q, vel=zeros6, kp=self._gains.arm_kp,
+                    kd=self._gains.arm_kd, tau=self._tau_ff
                 )
                 # The sdk swallows per-motor CallError to keep the other
                 # joints updating; it reports the count here instead.

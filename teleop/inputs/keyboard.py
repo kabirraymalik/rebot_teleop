@@ -22,8 +22,9 @@ BINDINGS = (
     "Z / X     : pitch +/-",
     "A / D     : yaw +/-",
     "O / C     : gripper open/close",
-    "SPACE     : fine mode (half step)",
-    "H         : reset to home",
+    "F         : toggle fine mode (half step)",
+    "SPACE     : HOLD/TRACK clutch (--mirror)",
+    "H         : return goal to start pose",
     "ESC       : quit",
 )
 
@@ -45,14 +46,16 @@ class KeyboardInput:
             raise ValueError(f"mode must be 'step' or 'hold', got {mode!r}")
         self.mode = mode
         pygame.init()
-        self._screen = pygame.display.set_mode((420, 260))
+        self._screen = pygame.display.set_mode((420, 280))
         pygame.display.set_caption("reBot teleop keys - FOCUS THIS WINDOW")
         self._font = pygame.font.Font(None, 20)
         self._axes = np.zeros(NUM_AXES)
+        self._fine = False
         self._draw()
 
     def poll(self) -> tuple[np.ndarray, dict]:
-        events: dict = {"reset": False, "quit": False, "slow": False}
+        events: dict = {"reset": False, "quit": False, "slow": False,
+                        "clutch": False}
         steps = np.zeros(NUM_AXES, dtype=int)
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -62,12 +65,16 @@ class KeyboardInput:
                     events["quit"] = True
                 elif ev.key == pygame.K_h:
                     events["reset"] = True
+                elif ev.key == pygame.K_SPACE:
+                    events["clutch"] = True
+                elif ev.key == pygame.K_f:
+                    self._fine = not self._fine
                 elif self.mode == "step" and ev.key in _KEY_AXIS:
                     axis, sign = _KEY_AXIS[ev.key]
                     steps[axis] += sign
 
         keys = pygame.key.get_pressed()
-        events["slow"] = bool(keys[pygame.K_SPACE])
+        events["slow"] = self._fine
         a = self._axes
         if self.mode == "hold":
             a[:] = 0.0

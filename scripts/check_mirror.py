@@ -81,6 +81,7 @@ class FakeGroup:
                 None if vel is None else np.array(vel, dtype=np.float64).copy(),
                 None if kp is None else np.array(kp, dtype=np.float64).copy(),
                 None if kd is None else np.array(kd, dtype=np.float64).copy(),
+                None if tau is None else np.array(tau, dtype=np.float64).copy(),
             )
         )
         self.owner.events.append(("send", self.name))
@@ -110,16 +111,19 @@ class FakeArm:
 
 
 class TargetSource:
-    """Mutable get_target provider."""
+    """Mutable get_target provider; optionally supplies gravity tau."""
 
     def __init__(self, q: np.ndarray, grip_norm: float) -> None:
         self.q = q.copy()
         self.grip_norm = grip_norm
+        self.tau = None
         self.fail = False
 
     def __call__(self):
         if self.fail:
             raise RuntimeError("input source dead")
+        if self.tau is not None:
+            return self.q.copy(), self.grip_norm, self.tau.copy()
         return self.q.copy(), self.grip_norm
 
 

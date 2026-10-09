@@ -25,7 +25,7 @@ _K = {
     "UP": 265, "DOWN": 264, "LEFT": 263, "RIGHT": 262,
     "W": 87, "S": 83, "A": 65, "D": 68, "Q": 81, "E": 69,
     "Z": 90, "X": 88, "O": 79, "C": 67, "H": 72, "F": 70,
-    "ESC": 256,
+    "SPACE": 32, "ESC": 256,
 }
 
 # keycode -> (axis index, sign); axes = [dx, dy, dz, droll, dpitch, dyaw, dgrip]
@@ -46,7 +46,8 @@ BINDINGS = (
     "  Z / X     : pitch +/-       A / D     : yaw +/-",
     "  O / C     : gripper open/close",
     "  F         : toggle fine mode (half steps)",
-    "  H         : reset to home   ESC       : quit",
+    "  SPACE     : HOLD/TRACK clutch (real arm, --mirror)",
+    "  H         : return goal to start pose   ESC: quit",
     "(some letters also flip viewer display toggles - cosmetic only)",
 )
 
@@ -58,6 +59,7 @@ class ViewerKeyInput:
         self._lock = threading.Lock()
         self._steps = np.zeros(NUM_AXES, dtype=int)
         self._reset = False
+        self._clutch = False
         self._quit = False
         self._fine = False
         print("\n".join(BINDINGS))
@@ -68,6 +70,8 @@ class ViewerKeyInput:
                 self._quit = True
             elif keycode == _K["H"]:
                 self._reset = True
+            elif keycode == _K["SPACE"]:
+                self._clutch = True
             elif keycode == _K["F"]:
                 self._fine = not self._fine
                 print(f"[viewer_keys] fine mode {'ON (half steps)' if self._fine else 'OFF'}")
@@ -80,8 +84,9 @@ class ViewerKeyInput:
             steps = self._steps.copy()
             self._steps[:] = 0
             events = {"reset": self._reset, "quit": self._quit, "slow": self._fine,
-                      "steps": steps}
+                      "clutch": self._clutch, "steps": steps}
             self._reset = False
+            self._clutch = False
         return np.zeros(NUM_AXES), events
 
     def close(self) -> None:

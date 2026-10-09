@@ -13,9 +13,11 @@ On macOS keyboard presses go to the viewer window itself; on Linux (or with
 --mirror additionally streams the live joint targets to the real arm at
 125 Hz (teleop.mirror.RealArmMirror). On start the sim is
 latched to the measured real pose (no jump) and the HOLD clutch is engaged:
-the real arm parks while the sim previews your commands. H toggles
-HOLD <-> TRACK (rate-limited catch-up; sim reset is disabled while
-mirroring). On exit (window close or Ctrl-C) the real arm ramps to its rest
+the real arm parks while the sim previews your commands. SPACE toggles
+HOLD <-> TRACK (rate-limited catch-up); H glides the EE goal back to the
+session-start pose. Gravity torques from the sim's calibrated-mass model are
+streamed as MIT feedforward so the real arm tracks like the sim instead of
+drooping. On exit (window close or Ctrl-C) the real arm ramps to its rest
 pose before torque-off.
 """
 from __future__ import annotations
@@ -65,8 +67,10 @@ GRIP_REF_SPEED = 0.6  # grip_norm/s == 3 rad/s in gripper motor space (3/5)
 
 
 class TargetState:
-    """Thread-safe (q6_target, grip_norm) hand-off point for a mirror loop.
+    """Thread-safe (q6_target, grip_norm, tau_g6) hand-off for a mirror loop.
 
+    tau_g6 is the gravity torque vector (N·m) from the sim's calibrated-mass
+    model, streamed as MIT feedforward so the real PD does not fight gravity.
     Returns None until the first set(), and again when the last set() is older
     than ``stale_after`` seconds (sim loop hung or died) — the mirror holds
     its current reference in both cases instead of tracking a dead value.
@@ -76,31 +80,34 @@ class TargetState:
         self._lock = threading.Lock()
         self._q6: np.ndarray | None = None
         self._grip = 0.0
+        self._tau = np.zeros(6)
         self._stamp = 0.0
         self._stale_after = stale_after
 
-    def set(self, q6: np.ndarray, grip: float) -> None:
+    def set(self, q6: np.ndarray, grip: float, tau_g: np.ndarray | None = None) -> None:
         with self._lock:
             if self._q6 is None:
                 self._q6 = np.array(q6, dtype=np.float64).copy()
             else:
                 self._q6[:] = q6
             self._grip = float(grip)
+            if tau_g is not None:
+                self._tau[:] = tau_g
             self._stamp = time.monotonic()
 
-    def get_target(self) -> tuple[np.ndarray, float] | None:
+    def get_target(self) -> tuple[np.ndarray, float, np.ndarray] | None:
         with self._lock:
             if self._q6 is None or time.monotonic() - self._stamp > self._stale_after:
                 return None
-            return self._q6.copy(), self._grip
+            return self._q6.copy(), self._grip, self._tau.copy()
 
 
 target_state = TargetState()
 
 
-def get_target() -> tuple[np.ndarray, float] | None:
-    """Latest (q6_target radians, grip_norm in [0,1]), or None before the
-    first sim frame; safe from any thread."""
+def get_target() -> tuple[np.ndarray, float, np.ndarray] | None:
+    """Latest (q6_target radians, grip_norm in [0,1], gravity tau N·m), or
+    None before the first sim frame; safe from any thread."""
     return target_state.get_target()
 
 
@@ -249,9 +256,13 @@ def main() -> None:
         print(f"[teleop_sim] mirror latched to real pose q6={np.round(q6_real, 3)}, "
               f"grip={grip_norm_real:.2f}")
         print("[teleop_sim] HOLD engaged: real arm is parked. Check the sim pose "
-              "matches the physical arm, position the goal triad, then press H "
-              "to let the real arm track (H toggles HOLD/TRACK; sim reset is "
-              "disabled while mirroring).")
+              "matches the physical arm, position the goal triad, then press "
+              "SPACE to let the real arm track (SPACE toggles HOLD/TRACK; "
+              "H returns the goal to the start pose).")
+
+    # Session start pose: what the H key returns the EE goal to (the latched
+    # real pose when mirroring, else the scene's rest/home pose).
+    init_pose = (cmd.pos.copy(), cmd.rpy.copy(), cmd.grip)
 
     timestep = model.opt.timestep
     n_sub = max(1, round((1.0 / 60.0) / timestep))  # physics steps per viewer frame
@@ -266,26 +277,28 @@ def main() -> None:
                 axes, events = dev.poll()
                 if events["quit"]:
                     break
-                if events["reset"]:
-                    if mirror is not None:
-                        # While mirroring, H is the HOLD/TRACK clutch, never a
-                        # sim reset (a reset would command a jump to the rest
-                        # pose on the real arm).
-                        if mirror.hold:
-                            tgt = target_state.get_target()
-                            ref_q, _ = mirror.reference
-                            delta = (float(np.abs(tgt[0] - ref_q).max())
-                                     if tgt is not None else 0.0)
-                            print(f"[teleop_sim] TRACK: real arm slews to the sim "
-                                  f"target (max joint delta {delta:.2f} rad, "
-                                  f"rate-limited)")
-                            mirror.set_hold(False)
-                        else:
-                            mirror.set_hold(True)
-                            print("[teleop_sim] HOLD: real arm parked; sim keeps "
-                                  "previewing")
+                if events.get("clutch") and mirror is not None:
+                    # SPACE: HOLD/TRACK clutch for the real arm.
+                    if mirror.hold:
+                        tgt = target_state.get_target()
+                        ref_q, _ = mirror.reference
+                        delta = (float(np.abs(tgt[0] - ref_q).max())
+                                 if tgt is not None else 0.0)
+                        print(f"[teleop_sim] TRACK: real arm slews to the sim "
+                              f"target (max joint delta {delta:.2f} rad, "
+                              f"rate-limited)")
+                        mirror.set_hold(False)
                     else:
-                        cmd = reset_home()
+                        mirror.set_hold(True)
+                        print("[teleop_sim] HOLD: real arm parked; sim keeps "
+                              "previewing")
+                if events["reset"]:
+                    # H: soft return — command the EE goal back to the pose the
+                    # session started at. The arm (sim, and real if tracking)
+                    # glides back through IK + the rate-limited reference; no
+                    # state is teleported.
+                    cmd = EECommand(init_pose[0], init_pose[1], init_pose[2])
+                    print("[teleop_sim] goal returned to the session start pose")
                 scale = 0.5 if events["slow"] else 1.0
                 steps = events.get("steps")
                 if steps is not None:
@@ -300,7 +313,10 @@ def main() -> None:
                                    grip_speed=GRIP_SPEED * scale)
                 quat = cmd.quat_wxyz
                 q6_target = ik.step(data, cmd.pos, quat, frame_dt)
-                target_state.set(q6_target, cmd.grip)
+                # Gravity torques at the current sim pose (calibrated masses):
+                # streamed as MIT feedforward so the real PD matches the sim's
+                # gravity-compensated PD instead of drooping under load.
+                target_state.set(q6_target, cmd.grip, data.qfrc_bias[arm_dadr])
 
                 if mocap_id >= 0:
                     data.mocap_pos[mocap_id] = cmd.pos
