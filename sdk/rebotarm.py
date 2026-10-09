@@ -405,6 +405,7 @@ class JointGroup:
         if kd is None:
             kd = self._mit_kd
 
+        failures = 0
         for i, jc in enumerate(self._jcfgs):
             try:
                 self._mm[jc.name].send_mit(
@@ -415,7 +416,10 @@ class JointGroup:
                     float(tau[i]),
                 )
             except CallError:
-                pass
+                failures += 1
+        # Best-effort semantics preserved (other joints keep updating), but a
+        # supervisor can watch this instead of flying blind on a dead motor.
+        self.last_send_failures = failures
 
     # ── POS_VEL 发送 ───────────────────────────────────────────────────
 
@@ -428,6 +432,7 @@ class JointGroup:
         if vlim is None:
             vlim = self._pv_vlim
         vlim = np.asarray(vlim, dtype=np.float64).reshape(-1)
+        failures = 0
         for i in range(min(len(pos), len(vlim))):
             try:
                 self._mm[self._jcfgs[i].name].send_pos_vel(
@@ -435,7 +440,8 @@ class JointGroup:
                     float(vlim[i]),
                 )
             except CallError:
-                pass
+                failures += 1
+        self.last_send_failures = failures
 
     # ── VEL 发送 ───────────────────────────────────────────────────────
 
@@ -488,7 +494,10 @@ class JointGroup:
                         continue
                     except CallError:
                         pass
-                out.append(0.0)
+                # Unknown position must be NaN, never 0.0: a silent zero here
+                # once made a latch/controller treat "read failed" as "joint at
+                # zero" and command a snap to the zero pose.
+                out.append(float("nan"))
         return np.array(out, dtype=np.float64)
 
     def get_velocities(self, request_feedback: bool = True) -> np.ndarray:

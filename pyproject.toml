@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rebot-teleop"
+version = "0.1.0"
+description = "Keyboard/PS4 teleop for the Seeed reBot B601-RS arm (MuJoCo IK + real-arm mirror)"
+requires-python = ">=3.11"
+dependencies = [
+    "mujoco>=3.10,<4",
+    "motorbridge>=0.5.6",
+    "numpy>=2.1",
+    "pyyaml>=6.0",
+    "pygame>=2.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["sdk*", "sim*", "teleop*"]
+
+[tool.setuptools.package-data]
+sdk = ["configs/*.yaml"]
+sim = ["models/*.xml", "models/meshes/*"]
