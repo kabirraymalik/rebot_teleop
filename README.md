@@ -38,8 +38,9 @@ MuJoCo viewer window (on macOS; on Linux a small pygame key window opens
 instead). Each press moves the EE goal one discrete step (default 1 cm / 5°;
 `--lin-step`, `--ang-step`, `--grip-step` to change, F toggles fine
 half-steps): arrows = x/y, W/S = z up/down, Q/E roll, Z/X pitch, A/D yaw,
-O/C gripper, H home (sim-only), ESC quit. Some letters also flip the viewer's
-own display toggles — cosmetic only.
+O/C gripper, H glides the goal back to the session-start pose, SPACE is the
+real-arm HOLD/TRACK clutch (`--mirror`), ESC quit. Some letters also flip the
+viewer's own display toggles — cosmetic only.
 IK tracks the goal and the arm follows through the same low-level stack the
 real arm will use (velocity-limited joint reference, 0.3 rad/s default via
 `--speed-limit`, + gravity-compensated PD). `--hold` restores hold-to-move
@@ -48,10 +49,12 @@ velocity control; `--kinematic` skips physics.
 `--mirror` additionally streams to the real arm. It enables torque, latches
 the sim to the arm's measured pose (no jump — also your visual check that
 zeroing is right), and starts **parked in HOLD**: the real arm holds still
-while you preview moves in sim. **H toggles HOLD ↔ TRACK** — on release the
-arm catches up to the sim target rate-limited (0.3 rad/s). On exit it ramps
-to the rest pose before torque-off. First runs: workspace clear, ≥1 m away,
-hand on the power switch.
+while you preview moves in sim. **SPACE toggles HOLD ↔ TRACK** — on release
+the arm catches up to the sim target rate-limited (0.3 rad/s); H glides the
+goal back to the session-start pose. Gravity torques from the sim's
+calibrated-mass model stream as MIT feedforward, so the real arm tracks like
+the sim instead of drooping under its own weight. First runs: workspace
+clear, ≥1 m away, hand on the power switch.
 
 Headless checks (plain python): `scripts/check_model.py`, `check_ik.py`,
 `check_sdk.py`, `check_mirror.py`, `check_e2e.py`.

@@ -23,6 +23,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from teleop.mirror import (  # noqa: E402
+    GRAVITY_FF_CLIP,
     MirrorGains,
     RealArmMirror,
     load_mit_gains,
@@ -203,7 +204,7 @@ def main() -> int:
     check(abs(float(fake.gripper.sends[-1][1][0]) - 4.5) < 1e-9,
           "gripper reference converged to 5.0*grip_norm")
     for group in (fake.arm, fake.gripper):
-        for _, _, vel, kp, kd in group.sends:
+        for _, _, vel, kp, kd, *_tau in group.sends:
             if vel is None or np.any(vel != 0.0):
                 raise AssertionError(f"{group.name}: send with v_des != 0")
             if kp is None or kd is None:
@@ -329,6 +330,26 @@ def main() -> int:
             raise AssertionError("re-hold: reference moved")
     check(len(refrozen) > 5, "re-hold freezes the reference again")
     mirror3.stop(safe=False)
+
+    print("[10] gravity feedforward pass-through + clip")
+    fake4 = FakeArm(Q0, G0_RAD)
+    src4 = TargetSource(Q0, G0_RAD / 5.0)
+    mirror4 = RealArmMirror(src4, arm_factory=lambda: fake4, config=GAINS)
+    mirror4.start()
+    time.sleep(0.15)
+    last_tau = arm_sends(fake4)[-1][5]
+    check(last_tau is not None and np.allclose(last_tau, 0.0),
+          "2-tuple source: tau feedforward defaults to zeros")
+    tau_in = np.array([5.0, 10.0, -10.0, 3.0, -3.0, 1.0])
+    src4.tau = tau_in
+    time.sleep(0.2)
+    check(np.allclose(arm_sends(fake4)[-1][5], tau_in),
+          "3-tuple source: gravity tau reaches send_mit unchanged (within clip)")
+    src4.tau = np.array([100.0, -100.0, 100.0, 50.0, -50.0, 50.0])
+    time.sleep(0.2)
+    check(np.allclose(np.abs(arm_sends(fake4)[-1][5]), GRAVITY_FF_CLIP),
+          "oversized tau is clipped to GRAVITY_FF_CLIP")
+    mirror4.stop(safe=False)
 
     print(f"\nALL GREEN: {_checks} checks passed")
     return 0

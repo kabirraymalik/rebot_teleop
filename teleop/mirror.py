@@ -161,8 +161,15 @@ class RealArmMirror:
         rate_hz: float = DEFAULT_RATE_HZ,
         speed_limit: float = DEFAULT_SPEED_LIMIT_RAD_S,
         config: Any = None,
+        debug_log: str | Path | None = None,
     ) -> None:
         self._get_target = get_target
+        # Tracking-debug: round-robin SDO position reads inside the loop
+        # (~4 Hz per joint sweep), CSV written on stop. Costs one blocking
+        # read every few ticks — enable only for diagnosis sessions.
+        self._debug_log = Path(debug_log) if debug_log else None
+        self._debug_rows: list[tuple] = []
+        self._debug_actual = np.full(6, np.nan)
         self._arm_factory = arm_factory if arm_factory is not None else _default_arm_factory
         self._rate_hz = float(rate_hz)
         self._track_vlim = np.broadcast_to(
@@ -421,7 +428,10 @@ class RealArmMirror:
                 goal_grip = float(self._ref_grip[0])  # hold gripper on ramp
                 vlim = ramp_vlim
             elif holding:
-                # Hold clutch: PD-hold the frozen reference, ignore targets.
+                # Hold clutch: PD-hold the frozen reference, ignore target
+                # POSITIONS — but keep polling so the gravity feedforward
+                # stays fresh (tau=0 while parked means the arm droops).
+                self._poll_target(now)
                 goal_q = self._ref_q
                 goal_grip = float(self._ref_grip[0])
                 vlim = self._track_vlim
