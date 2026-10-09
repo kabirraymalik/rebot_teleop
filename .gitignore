@@ -13,3 +13,4 @@ MUJOCO_LOG.TXT
 
 # Vendor reference material, removed after development
 dev_helpers/
+track_debug.csv

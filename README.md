@@ -2,12 +2,13 @@
 
 Teleoperation for the Seeed reBot B601-RS arm (6 DOF + gripper, RobStride motors).
 
-Two modes, built in order:
+Two modes:
 
-1. **EE-pose teleop** — a 6-DOF end-effector pose + 1-DOF gripper command is moved with
-   keyboard or PS4 controller; IK makes the MuJoCo arm track it; the real arm mirrors the sim.
+1. **EE-pose teleop** (working) — a 6-DOF end-effector pose + 1-DOF gripper command is
+   moved with keyboard or PS4 controller; IK makes the MuJoCo arm track it; the real arm
+   mirrors the sim through the same 125 Hz low-level stack, with gravity feedforward.
 2. **Leader–follower** (planned) — a second reBot arm acts as a passive leader; the follower
-   mirrors its joints directly.
+   mirrors its joints directly (`teleop/leader.py` skeleton + vendor-derived mapping policy).
 
 ## Setup
 
@@ -64,10 +65,10 @@ Headless checks (plain python): `scripts/check_model.py`, `check_ik.py`,
 | Path | What it is |
 | --- | --- |
 | `sdk/` | Minimal real-arm SDK: `rebotarm.py` (extracted from Seeed's reBotArm_control_py) over the `motorbridge` pip package, plus hardware YAML configs |
-| `sim/models/` | MuJoCo model: `rs_arm.xml` (vendor MJCF: actuators, coupled gripper, `tcp` site) + meshes + scenes |
+| `sim/models/` | MuJoCo model: `rs_arm.xml` (vendor MJCF, calibrated inertials) + meshes; scenes: `teleop_empty.xml` (default), `teleop_scene.xml` (table + objects) |
 | `sim/` | IK (damped-least-squares on MuJoCo Jacobians) |
 | `teleop/` | EE command state, keyboard/PS4 input backends, real-arm mirror loop, leader-arm policy |
-| `scripts/` | Entry points (`teleop_sim.py`, …) |
+| `scripts/` | `teleop_sim.py` (main entry), `watch_positions.py` + `diagnose_rs06_scaling.py` (diagnostics), `check_*.py` (headless tests) |
 | `robot_assets/` | Official RS description package (URDF + STLs), reference only |
 | `dev_helpers/` | Vendor repos used as reference during development — will be removed |
 
@@ -79,12 +80,19 @@ Headless checks (plain python): `scripts/check_model.py`, `check_ik.py`,
   the PCBUSB library (`~/.local/lib/libPCBUSB.dylib`, no sudo needed) with channel
   `can0@1000000`. The SDK auto-selects. The CH340-based RobStride AT-mode debug board is
   NOT usable with this stack.
-- **Power**: 48 V PSU — check the **115 V/230 V input selector** matches your outlet; on
-  the wrong setting the supply browns out and the bus looks completely dead (motors never
-  ACK a single CAN frame).
+- **Power**: 48 V PSU, ≥12.5 A (25 A for full performance) — check the **115 V/230 V
+  input selector** matches your outlet; on the wrong setting the supply browns out and
+  the bus looks completely dead (motors never ACK a single CAN frame). If loaded joints
+  go weak or dead mid-session, power-cycle the PSU to clear any latched motor faults.
 - **Live monitor**: `python scripts/watch_positions.py` (read-only, torque never enabled)
   shows all joint angles at 5 Hz while you move the arm by hand. Only one process can own
-  the CAN channel at a time — stop it before running anything else on the bus.
+  the CAN channel at a time — a `PCAN_ERROR_INITIALIZE` means something else (monitor,
+  scan, teleop, gateway) is still holding it.
+- **Diagnostics**: `--mirror --debug-track` logs reference vs actual joint positions plus
+  bus voltage and shoulder phase currents to `track_debug.csv` (~4 Hz) for tuning sessions.
+  `scripts/diagnose_rs06_scaling.py` (moves joint 1 a few degrees — run it yourself)
+  verifies MIT gain/damping scaling end-to-end on an unloaded rs-06 motor; note RobStride
+  packs MIT frames with per-model ranges (rs-00: kp/500, kd/5; rs-06: kp/5000, kd/100).
 - **Rates**: stream joint commands at **125 Hz** (500 Hz overruns the bus with 7 motors).
   Position feedback is a per-joint register read — poll it at ~20 Hz, outside the send loop.
 - **Zeroing**: motor zero = URDF zero = arm fully extended. Zero with the arm at rest,
@@ -94,6 +102,6 @@ Headless checks (plain python): `scripts/check_model.py`, `check_ik.py`,
 
 - Disabling motors (`disable_all`, estop, disconnect) cuts torque — a raised arm **free-falls**.
   Always ramp to a rest pose first.
-- `--mirror` starts parked in HOLD — torque on, no motion until you press H. Sim-only
+- `--mirror` starts parked in HOLD — torque on, no motion until you press SPACE. Sim-only
   mode never touches the bus.
 - First hardware runs: low speed (≤0.4 rad/s), small steps, hand on the power switch.

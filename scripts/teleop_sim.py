@@ -162,7 +162,10 @@ def main() -> None:
                     help="teleport qpos to the shaped reference instead of PD physics")
     ap.add_argument("--mirror", action="store_true",
                     help="stream joint targets to the real arm at 125 Hz; "
-                         "starts parked in HOLD, H toggles HOLD/TRACK")
+                         "starts parked in HOLD, SPACE toggles HOLD/TRACK")
+    ap.add_argument("--debug-track", action="store_true",
+                    help="with --mirror: log reference vs actual joint "
+                         "positions (~4 Hz) to track_debug.csv for tuning")
     args = ap.parse_args()
 
     model = mujoco.MjModel.from_xml_path(_resolve_scene(args.scene))
@@ -241,7 +244,8 @@ def main() -> None:
     if args.mirror:
         from teleop.mirror import RealArmMirror  # lazy: only touch sdk paths when asked
 
-        mirror = RealArmMirror(get_target=get_target)
+        debug_log = (REPO_ROOT / "track_debug.csv") if args.debug_track else None
+        mirror = RealArmMirror(get_target=get_target, debug_log=debug_log)
         try:
             # Start with the hold clutch engaged: the real arm parks at its
             # latched pose while the sim previews; H releases it.

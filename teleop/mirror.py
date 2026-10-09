@@ -414,6 +414,8 @@ class RealArmMirror:
 
         last = time.monotonic()
         next_t = last + period
+        tick = 0
+        t_dbg0 = last
         while not self._stop_evt.is_set():
             now = time.monotonic()
             dt = now - last
@@ -492,12 +494,46 @@ class RealArmMirror:
                     except Exception:
                         pass
                     self._stop_evt.set()
-                    return
+                    break
 
             if ramping and not self._rest_evt.is_set() and np.all(
                 np.abs(self._ref_q) <= REST_TOLERANCE_RAD
             ):
                 self._rest_evt.set()
+
+            if self._debug_log is not None:
+                tick += 1
+                if tick % 31 == 0:  # ~4 Hz: one full (blocking) position sweep
+                    try:
+                        act = np.asarray(arm_group.get_positions(),
+                                         dtype=np.float64).reshape(-1)[:6]
+                        self._debug_actual[: act.shape[0]] = act
+                    except Exception:
+                        pass
+                    # Bus voltage + actual phase current on the loaded joints:
+                    # separates "commands too soft" from "supply collapses /
+                    # current folds back under load".
+                    vbus = iq2 = iq3 = float("nan")
+                    mm = getattr(arm_group, "_mm", None)
+                    jcfgs = getattr(arm_group, "_jcfgs", None)
+                    if mm is not None and jcfgs:
+                        names = [jc.name for jc in jcfgs]
+                        try:
+                            vbus = mm[names[1]].robstride_get_param_f32(0x701C)
+                        except Exception:
+                            pass
+                        try:
+                            iq2 = mm[names[1]].robstride_get_param_f32(0x701A)
+                        except Exception:
+                            pass
+                        try:
+                            iq3 = mm[names[2]].robstride_get_param_f32(0x701A)
+                        except Exception:
+                            pass
+                    self._debug_rows.append(
+                        (now - t_dbg0, *self._ref_q, *self._debug_actual,
+                         *self._tau_ff, vbus, iq2, iq3, int(holding))
+                    )
 
             next_t += period
             sleep_s = next_t - time.monotonic()
@@ -505,3 +541,21 @@ class RealArmMirror:
                 time.sleep(sleep_s)
             else:
                 next_t = time.monotonic()  # fell behind; do not spiral
+        self._flush_debug()
+
+    def _flush_debug(self) -> None:
+        if self._debug_log is None or not self._debug_rows:
+            return
+        try:
+            hdr = (["t"] + [f"ref_j{i}" for i in range(1, 7)]
+                   + [f"act_j{i}" for i in range(1, 7)]
+                   + [f"tau_j{i}" for i in range(1, 7)]
+                   + ["vbus", "iq_j2", "iq_j3", "holding"])
+            lines = [",".join(hdr)]
+            lines += [",".join(f"{v:.5f}" if isinstance(v, float) else str(v)
+                               for v in row) for row in self._debug_rows]
+            self._debug_log.write_text("\n".join(lines) + "\n")
+            print(f"[mirror] tracking log: {self._debug_log} "
+                  f"({len(self._debug_rows)} samples)")
+        except Exception as exc:
+            print(f"[mirror] failed to write tracking log: {exc}")
