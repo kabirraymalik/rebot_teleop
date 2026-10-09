@@ -19,14 +19,21 @@
 
 # Kinematics config (URDF path, end-effector frame)
 
-urdf_path: "urdf/RS/urdf/ReBot_Arm_RS.urdf"
+# Optional/informational only — the SDK itself never loads the URDF.
+# Path is relative to this yaml file.
+urdf_path: "../../robot_assets/urdf/ReBot_Arm_RS.urdf"
 end_effector_frame: "gripper_end"
 # arm 默认控制模式（仅影响 example/7 和 8 中 RebotArmEndPose 的默认值，显式传入 arm_control_mode 参数时覆盖）
 # Default arm control mode (only affects RebotArmEndPose examples 7 & 8; overridden by explicit arm_control_mode argument)
 arm_control_mode: "mit"
 
-channel: can0
-rate: 500
+# channel/transport resolved by sdk.transport.make_controller ("auto" scans the
+# platform: socketcan can0 on Linux, PCBUSB or a serial bridge node on macOS).
+channel: auto
+transport: auto
+# One 1 Mbps CAN bus carries seven MIT commands plus feedback; a 500 Hz loop
+# overruns continuously. 125 Hz is the hardware-validated sustainable cadence.
+rate: 125  # original vendor value: 500
 
 groups:
   arm:
@@ -35,14 +42,18 @@ groups:
     joints: [gripper]
 
 joints:
+  # Arm MIT gains below are the hardware-validated set:
+  #   kp [80, 150, 150, 50, 50, 50], kd [5, 10, 10, 5, 4, 4]
+  # (J1 stiffened over the vendor default to overcome measured
+  # direction-dependent static friction; J2..J6 match the vendor values.)
   - name: joint1
     motor_id: 0x01
     feedback_id: 0xFD
     model: "rs-06"
     vendor: "robstride"
     MIT:
-      kp: 50.0
-      kd: 3.0
+      kp: 80.0  # original vendor value: 50.0
+      kd: 5.0   # original vendor value: 3.0
     POS_VEL:
       vel_kp: 12.0
       vel_ki: 0.1
@@ -132,6 +143,14 @@ joints:
       vel_ki: 0.1
       pos_kp: 10.0
       vlim: 5.0
+
+# Leader-follow (teleop leader arm) MIT gains, hardware-validated.
+# Source: Seeed-Projects/lerobot-robot-seeed-b601 follower gains with
+# gravity_compensation=True. Uncomment and apply via JointGroup.mode_mit(kp, kd)
+# when running this arm as a compliant leader.
+# leader_follow:
+#   mit_kp: [50.0, 50.0, 50.0, 30.0, 50.0, 50.0]
+#   mit_kd: [3.0, 5.0, 5.0, 3.0, 4.0, 4.0]
 
 gravity_compensation:
   # Legacy/default values kept for existing consumers.

@@ -40,26 +40,31 @@ import yaml
 
 from motorbridge import Controller, Mode, CallError
 
-_CFG_DIR = Path(__file__).parent.parent.parent / "config"
+from sdk import transport as _transport
+
+_CFG_DIR = Path(__file__).resolve().parent / "configs"
 _GLOBAL_CFG = _CFG_DIR / "rebotarm.yaml"
 
 
-def _resolve_hw_cfg_path(hw_yaml: str | None = None) -> Path:
-    if hw_yaml is None:
-        if not _GLOBAL_CFG.exists():
-            raise FileNotFoundError(f"{_GLOBAL_CFG} not found")
-        data = yaml.safe_load(_GLOBAL_CFG.read_text())
-        hw_yaml = data.get("hardware_yaml") if data else None
-        if not hw_yaml:
-            raise ValueError("hardware_yaml not set in rebotarm.yaml")
+def _resolve_hw_cfg_path(cfg_path: str | Path | None = None) -> Path:
+    """Resolve cfg_path to the hardware YAML, following one level of
+    ``hardware_yaml`` indirection (relative to the referencing file)."""
+    p = Path(cfg_path) if cfg_path is not None else _GLOBAL_CFG
+    if not p.is_absolute() and not p.exists():
+        p = _CFG_DIR / p
+    if not p.exists():
+        raise FileNotFoundError(f"config not found: {p}")
 
-    p = Path(hw_yaml)
-    if p.is_absolute():
-        return p
-    path = _CFG_DIR / hw_yaml
-    if path.exists():
-        return path
-    raise FileNotFoundError(f"hardware config not found: {path}")
+    data = yaml.safe_load(p.read_text()) or {}
+    hw_yaml = data.get("hardware_yaml") if isinstance(data, dict) else None
+    if not hw_yaml:
+        return p  # already a hardware config
+    hp = Path(hw_yaml)
+    if not hp.is_absolute():
+        hp = p.parent / hw_yaml
+    if not hp.exists():
+        raise FileNotFoundError(f"hardware config not found: {hp}")
+    return hp
 
 
 # --------------------------------------------------------------------------
@@ -82,8 +87,8 @@ class JointCfg:
     vlim: float = 0.0
 
 
-def load_cfg(hw_yaml: str | None = None) -> dict:
-    hw_path = _resolve_hw_cfg_path(hw_yaml)
+def load_cfg(cfg_path: str | Path | None = None) -> dict:
+    hw_path = _resolve_hw_cfg_path(cfg_path)
 
     with open(hw_path, "r") as f:
         data = yaml.safe_load(f)
@@ -109,7 +114,9 @@ def load_cfg(hw_yaml: str | None = None) -> dict:
 
     return {
         "name": data.get("name", "reBotArm"),
-        "channel": data.get("channel", "/dev/ttyACM0"),
+        "channel": str(data.get("channel", "auto")),
+        "transport": str(data.get("transport", "auto")),
+        "baud": int(data.get("baud", 921600)),
         "rate": float(data.get("rate", 500.0)),
         "groups": data.get("groups", {}),
         "joints": joints,
@@ -119,7 +126,7 @@ def load_cfg(hw_yaml: str | None = None) -> dict:
 
 def load_gravity_compensation_config(
     profile: str,
-    hw_yaml: str | None = None,
+    cfg_path: str | Path | None = None,
 ) -> dict:
     """Load one gravity-compensation profile from the active hardware YAML.
 
@@ -127,7 +134,7 @@ def load_gravity_compensation_config(
     ``gravity_compensation``. Hardware YAML files without ``profiles`` remain
     compatible and return their legacy/default gravity-compensation mapping.
     """
-    hw_path = _resolve_hw_cfg_path(hw_yaml)
+    hw_path = _resolve_hw_cfg_path(cfg_path)
     with open(hw_path, "r") as f:
         data = yaml.safe_load(f) or {}
 
@@ -526,12 +533,14 @@ class RebotArm:
         arm.add_group("custom", ["joint1", "joint2"])
     """
 
-    def __init__(self, hw_yaml: str | None = None) -> None:
-        self._hw_yaml = _resolve_hw_cfg_path(hw_yaml).name
-        cfg = load_cfg(hw_yaml)
+    def __init__(self, cfg_path: str | Path | None = None) -> None:
+        self._hw_yaml = _resolve_hw_cfg_path(cfg_path).name
+        cfg = load_cfg(cfg_path)
 
         self._name: str = cfg["name"]
         self._channel: str = cfg["channel"]
+        self._transport: str = cfg["transport"]
+        self._baud: int = cfg["baud"]
         self._rate: float = cfg["rate"]
         self._all_joints: List[JointCfg] = cfg["joints"]
         self._groups_def: dict = cfg["groups"]
@@ -557,9 +566,11 @@ class RebotArm:
         self._connected = True
 
     def _make_controller(self, vendor: str) -> Controller:
-        if self._channel.startswith("/dev/tty"):
-            return Controller.from_dm_serial(self._channel, 921600)
-        return Controller(self._channel)
+        # Module attribute lookup (not a direct import of make_controller) so
+        # tests can monkeypatch sdk.transport.make_controller.
+        return _transport.make_controller(
+            self._channel, self._transport, self._baud, vendor,
+        )
 
     def _setup_motors(self) -> None:
         for jc in self._all_joints:
